@@ -1,42 +1,40 @@
-import { TicketDates, TicketInfo } from "./tickets"
+import { PropertiesResume, Property } from './db/repositories/propertyRepo'
 
-export enum Message {
-  welcomeMessage = 'welcomeMessage',
-  ticketsFound = 'ticketsFound'
+export enum MessageType {
+  unavailable = 'unavailable',
+  welcome = 'welcome',
+  newRental = 'newRental',
+  avgPrices = 'avgPrices'
 }
 
 export const staticMessages = {
-  [Message.welcomeMessage]: `Bienvenido a PasajesBot.\nPara comenzar a utilizarlo debes ejectutar el comando '/agregarViaje\nRecorda que puedes agregar hasta 3 viajes en simultaneo`
+  [MessageType.unavailable]: `Este es un bot privado y por lo tanto no esta disponible`,
+  [MessageType.welcome]: `Bienvenido!`
 }
 
-function ticketInfoMessage(ticket: TicketInfo, index: number) : string {
-  return `${index + 1}\\. *Fecha*: ${ticket.date} \\- *Asientos disponibles*: ${ticket.seatsAvailable}`
+function cleanText(text: string) : string {
+  return text.replace(/\(/g, '\\(').replace(/\)/g, '\\)').replace(/\./g, '\\.').replace(/-/g, '\\-')
 }
 
-function getTicketInfo(tickets: TicketInfo[]) : string {
-  return tickets.reduce((finalText, ticket, index) => {
-    return finalText += ticketInfoMessage(ticket, index) + '\n\\'
-  }, '')
+function propertyDetails(property: Property) {
+  const link = (process.env.PAGE_BASE_URL + property.link)
+  return `Barrio: *${cleanText(property.neighborhood)}*\n\n` +
+    `Dirección: ${cleanText(property.address)}\n` +
+    `Ambientes: ${property.rooms}\n` +
+    `Precio: $${property.price} \\(${property.priceCurrency}\\)\n` +
+    `Expensas: $${property.expenses}\n` +
+    `Link: [Click aquí](${link})\n\n`
 }
 
-export interface TicketLocations {
-  origin: string,
-  destination: string
-}
-
-export interface TicketDepartureConstraints {
-  outbound: string[],
-  return: string[]
-}
-
-function getTicketInfoText(tickets: TicketDates, locations: TicketLocations, departureConstraints: TicketDepartureConstraints) {
-  return `Pasajes encontrados para el tramo *${locations.origin} \\- ${locations.destination}* para los proximos 30 dias\n\n` +
-    `Viajes de ida \\(${departureConstraints.outbound.join(', ')}\\):\n\n` + 
-    `${getTicketInfo(tickets.outbound) || '_No se encontraron pasajes para estas fechas_'}\n` +
-    `Viajes de vuelta \\(${departureConstraints.return.join(', ')}\\):\n\n` +
-    `${ getTicketInfo(tickets.return) || '_No se encontraron pasajes para estas fechas_' }\n`
+function averagePrices(propertiesResumes: PropertiesResume[]) {
+  return propertiesResumes.map(p => 
+    `*Ambientes*: ${p.rooms}\n` +
+    `*Precio promedio*: $${p.avgPrice}\n` +
+    `*Expensas promedio*: $${p.avgExpenses}`
+  ).join('\n\n')
 }
 
 export const Messages = {
-  [Message.ticketsFound]: (tickets: TicketDates, locations: TicketLocations, departureConstraints: TicketDepartureConstraints) => getTicketInfoText(tickets, locations, departureConstraints)
+  [MessageType.newRental]: (property: Property) => propertyDetails(property),
+  [MessageType.avgPrices]: (propertiesResumes: PropertiesResume[]) => averagePrices(propertiesResumes)
 }

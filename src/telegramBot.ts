@@ -1,20 +1,22 @@
-import { Scenes, session, Telegraf } from 'telegraf'
+import { Context, Telegraf } from 'telegraf'
 import { Dao } from './db/dao';
 import UserRepo from './db/repositories/userRepo';
-import { locationScene } from './scenes/locationScene';
-import { Message, Messages, staticMessages, TicketDepartureConstraints, TicketLocations } from './Messages';
-import { TicketDates } from './tickets';
-import { CustomContext, Scene } from './scenes/types';
-import { removeTripScene } from './scenes/removeTripScene';
-import UserTripRepo from './db/repositories/userTripRepo';
+import PropertyRepo, { Property } from './db/repositories/propertyRepo'
+import { Message } from 'telegraf/typings/core/types/typegram'
+import { MessageType, Messages } from './Messages';
+/* import { Message, staticMessages } from './Messages'; */
 
-const TelegramToken = '5610696122:AAGgKZHCerubkX038oQIoyVBrX3-8ZPOgM8'
+const TelegramToken = process.env.BOT_TOKEN
+
+function formatDate(date: Date) {
+  return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`
+}
 
 export class TelegramBot {
   static instance?: TelegramBot;
-  private bot?: Telegraf<CustomContext>;
+  private bot?: Telegraf<Context>;
   private userRepo;
-  private userTripRepo;
+  private propertiesRepo;
 
   static initialize() {
     if(!!this.instance) throw new Error('Bot has been already initialized')
@@ -29,41 +31,58 @@ export class TelegramBot {
 
   private constructor() {
     this.userRepo = new UserRepo(Dao.getInstance())
-    this.userTripRepo = new UserTripRepo(Dao.getInstance())
-    this.bot = new Telegraf<CustomContext>(TelegramToken)
-    const stage = new Scenes.Stage<CustomContext>([locationScene(), removeTripScene()])
-    this.bot.use(session())
-    this.bot.use(stage.middleware())
-    this.bot.command('/agregarViaje', (ctx) => this.enterLocationScene(ctx))
-    this.bot.command('/eliminarViaje', (ctx) => this.enterRemoveTripScene(ctx))
-    this.bot.start((ctx) => this.startBot(ctx))
+    this.propertiesRepo = new PropertyRepo(Dao.getInstance())
+    this.bot = new Telegraf<Context>(TelegramToken)
+    this.bot.on('message', async (ctx, next) => await this.checkIfUserIsValid(ctx, next))
+    this.bot.start((ctx) => ctx.sendMessage('Bienvenido!'))
+    this.bot.command('setSearchLink', (ctx) => this.setSearchLink(ctx))
+    this.bot.command('getAvgPrices', (ctx) => this.getAvgPrices(ctx))
     this.bot.launch()
   }
 
-  private async enterLocationScene(ctx: CustomContext) {
-    const userTrips = await this.userTripRepo.countTripForUsers(ctx.chat?.id as number)
-    userTrips < 3 ? ctx.scene.enter(Scene.locationScene) : ctx.sendMessage('Has alcanzado el maximo de viajes disponible (3).')
-  }
-
-  private async enterRemoveTripScene(ctx: CustomContext) {
-    const userTrips = await this.userTripRepo.countTripForUsers(ctx.chat?.id as number)
-    userTrips !== 0 ? ctx.scene.enter(Scene.removeTripScene) : ctx.sendMessage('No tienes viajes disponibles.')
-  }
-
-  startBot(ctx: CustomContext) {
+  async setSearchLink(ctx: Context) {
     const chatId = ctx.chat?.id
-    const userName = ctx.from?.first_name
-    if(!chatId || !userName) return
-    this.userRepo.insert({chatId, name: userName})
-    ctx.sendMessage(staticMessages[Message.welcomeMessage])
+    if(!chatId) return
+    const message = ctx.message as Message.TextMessage
+    const [ _, searchLink ] = message.text.split(' ')
+    this.userRepo.setSearchLink(chatId, searchLink)
+    ctx.reply('Link de búsqueda actualizado')
   }
 
-  sendTicketsFound(chatId: number, ticketsAvailable: TicketDates, locations: TicketLocations, departureConstraints: TicketDepartureConstraints) {
-    const message = Messages[Message.ticketsFound](ticketsAvailable, locations, departureConstraints)
-    this.sendMessage(chatId, message)
+  async getAvgPrices(ctx: Context) {
+    const chatId = ctx.chat?.id
+    if(!chatId) return
+    const today = new Date()
+    today.setDate(today.getDate() + 1)
+    const oneWeekAgo = new Date()
+    oneWeekAgo.setDate(today.getDate() - 7)
+    const resumes = await this.propertiesRepo.getResumes(formatDate(oneWeekAgo), formatDate(today))
+    await this.sendMessage(chatId, 'Resumen de las propiedades encontradas en la última semana')
+    this.sendMessage(chatId, Messages[MessageType.avgPrices](resumes))
   }
 
-  sendMessage(chatId: number, message: string) {
-    this.bot?.telegram.sendMessage(chatId, message, { parse_mode: 'MarkdownV2'})
+  async checkIfUserIsValid(ctx: Context, next: Function) {
+    if(!ctx.chat?.id) return ctx.sendMessage('Este bot es de uso privado y por lo tanto no esta disponible')
+    const exists = await this.userRepo.getById(ctx.chat?.id as number)
+    if(!exists)
+      return ctx.sendMessage('Este bot es de uso privado y por lo tanto no esta disponible')
+    next()
+  }
+
+  async sendNewRentalsFound(chatId: number, properties: Property[]) { //FIXME: ARREGLAR EL SORT
+    await this.sendMessage(chatId, 'Nuevos alquileres encontrados\\!')
+    for(const property of properties) {
+      try {
+        const message = Messages[MessageType.newRental](property)
+        await this.sendMessage(chatId, message, false)
+      } catch(err) {
+        console.log('FATAL ERROR')
+        console.log(err)
+      }
+    }
+  }
+
+  async sendMessage(chatId: number, message: string, linkPreview: boolean = true) {
+    await this.bot?.telegram.sendMessage(chatId, message, { parse_mode: 'MarkdownV2', disable_web_page_preview: linkPreview})
   }
 }
